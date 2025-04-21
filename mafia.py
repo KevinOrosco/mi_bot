@@ -1,7 +1,9 @@
+#pipenv install -U discord.py
 import discord
 import random
 import asyncio
 from discord.ext import commands
+from discord.ui import Button, View
 import os
 from dotenv import load_dotenv
 
@@ -36,6 +38,7 @@ def crear_partida(ctx):
         "canal": ctx.channel,
         "roles": {},
         "vivos": set(),
+        "acciones": {},
         "num_jugadores": None
     }
 
@@ -205,5 +208,100 @@ async def iniciar_partida(ctx, partida):
     canal = partida["canal"]
     # Anunciamos públicamente el inicio del juego
     await canal.send("🎉 **¡La partida ha comenzado!** 🔥 Que comience la masacre...\n🌙 **Cae la noche...** Los roles especiales están actuando...")
+
+    #El bucle continuara hasta que se cierre con un break
+    while True:
+        # --------- FASE DE NOCHE ---------
+        partida["estado"] = "noche"
+        partida["acciones"] = {}  # Reiniciamos las acciones nocturnas
+
+        # Anuncio general de que comenzó la noche
+        await canal.send("----------🌕**NOCHE**🌕----------\n🌌 **NOCHE** ha caído sobre el pueblo...\n⏳ Aquellos con habilidades tienen **60 segundos** para actuar.⏳\n😴 Los ciudadanos... duermen sin sospechar.")
+
+        vivos = list(partida["vivos"]) # Convertimos el set de vivos a lista
+
+        # Enviamos botones de acción a mafia, doctor y detective
+        for jugador in vivos:
+
+            # Obtenemos el rol del jugador actual
+            rol = partida["roles"][jugador]
+
+            # Solo enviamos botones a los que tienen rol activo en la noche
+            if rol in ["doctor", "detective", "mafia"]:
+                # Creamos una vista (grupo de botones) con un timeout de 90 segundos
+                view = View(timeout=90)
+                # Por cada jugador vivo, generamos un botón como posible objetivo
+                for objetivo in vivos:
+                    
+                    # Creamos un botón con el nombre del objetivo
+                    button = Button(label=objetivo.display_name, style=discord.ButtonStyle.primary)
+                    # Definimos lo que pasa cuando alguien clickea el botón
+                    async def callback(interaction, obj=objetivo, jug=jugador, rol=rol):
+
+                        # Si alguien distinto al dueño del botón intenta usarlo, se le niega
+                        if interaction.user != jug:
+                            await interaction.response.send_message("🚫 Este botón no es para vos.", ephemeral=True)
+                            return
+
+                        # Si el jugador ya eligió antes, no puede volver a elegir
+                        if jug in partida["acciones"]:
+                            await interaction.response.send_message("⚠️ Ya has elegido a tu objetivo.", ephemeral=True)
+                            return
+
+                        # Guardamos la acción del jugador: qué rol tiene y a quién apuntó
+                        partida["acciones"][jug] = (rol, obj)
+
+                        # Confirmamos al jugador su elección en un mensaje privado
+                        await interaction.response.send_message(f"✅ Elegiste a **{obj.display_name}**.", ephemeral=True)
+                       
+                    # Asociamos el callback al botón
+                    button.callback = callback
+                    # Agregamos el botón a la vista
+                    view.add_item(button)
+                
+                # Le enviamos al jugador por DM la vista con los botones para que elija
+                try:
+                    await jugador.send(f"🕹️ **¡Hora de actuar, {rol.upper()}!**\nElegí a quién usar tu habilidad:\n⬇️⬇️⬇️", view=view)
+                # Si no se puede enviar (por DMs bloqueados, por ejemplo), avisamos en el canal
+                except:
+                    await canal.send(f"⚠️ No se pudo enviar opciones a {jugador.display_name}.")
+
+        # Esperamos 60 segundos para que todos tengan tiempo de elegir
+        await asyncio.sleep(60)
+
+        # Recopilamos los objetivos elegidos por los mafiosos
+        mafia_targets = [accion[1] for jug, accion in partida["acciones"].items() if accion[0] == "mafia"]
+        # Seleccionamos aleatoriamente a una víctima de entre las elecciones de los mafiosos
+        objetivo_mafia = random.choice(mafia_targets) if mafia_targets else None
+
+        # Inicializamos la variable que almacenará a quién curó el doctor
+        objetivo_curado = None
+
+        # Recorremos todas las acciones realizadas durante la noche
+        for jug, (accion, obj) in partida["acciones"].items():
+
+            # Si el rol es doctor, guardamos a quién curó (puede haber varios doctores, pero el último sobrescribirá)
+            if accion == "doctor":
+                objetivo_curado = obj
+        
+        # Recorremos otra vez las acciones para procesar lo que hizo el detective
+        for jug, (accion, obj) in partida["acciones"].items():
+            if accion == "detective":
+
+                # Obtenemos el rol de la persona investigada por el detective
+                rol_obj = partida["roles"].get(obj)
+                try:
+                     # Enviamos por DM el resultado de la investigación
+                    await jug.send(f"🔍 **Investigación completada**:\n🧑‍✈️ **{obj.display_name}** es... **{rol_obj.upper()}**.")
+                except:
+                    await canal.send(f"⚠️ No se pudo enviar el resultado al detective {jug.display_name}.")
+
+        # Inicializamos la variable que almacenará a la víctima de la mafia
+        muerto = None
+        # Si la mafia eligió a alguien, y ese alguien no fue curado por el doctor, y sigue vivo...
+        if objetivo_mafia and objetivo_mafia != objetivo_curado and objetivo_mafia in partida["vivos"]:
+            # ...entonces esa persona muere (la removemos de la lista de vivos)
+            partida["vivos"].remove(objetivo_mafia)
+            muerto = objetivo_mafia # Y la guardamos como "muerto" para anunciarlo luego
 
 bot.run(TOKEN) # Corremos el bot
