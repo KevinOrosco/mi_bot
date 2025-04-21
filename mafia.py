@@ -304,4 +304,125 @@ async def iniciar_partida(ctx, partida):
             partida["vivos"].remove(objetivo_mafia)
             muerto = objetivo_mafia # Y la guardamos como "muerto" para anunciarlo luego
 
+        # Actualizamos el estado de la partida a "día" para iniciar la siguiente fase
+        partida["estado"] = "dia"
+
+        # Si hay un jugador muerto (es decir, la mafia mató a alguien que no fue curado)
+        if muerto:
+            # Anunciamos el inicio del día y el nombre del jugador asesinado
+            await canal.send(f"----------☀️**DIA**☀️----------\n☀️ **¡Amanece un nuevo día!**\n💀 Durante la noche, **{muerto.display_name}** fue encontrado... sin vida.")
+            # Obtenemos los roles de los jugadores que siguen vivos
+            vivos_roles = [partida["roles"][j] for j in partida["vivos"]]
+            mafias = vivos_roles.count("mafia") # Contamos cuántas mafias quedan vivas
+            no_mafias = len(partida["vivos"]) - mafias # Calculamos cuántos no-mafias quedan
+
+            # Condición de victoria: si no quedan mafias vivas, gana el pueblo
+            if mafias == 0:
+                await anunciar_fin(canal, partida, ganadores="Ciudadanos")
+                break
+            # Condición de victoria: si las mafias son igual o más que los no-mafias, gana la mafia
+            elif mafias >= no_mafias:
+                await anunciar_fin(canal, partida, ganadores="Mafia")
+                break
+        else:
+            await canal.send("----------☀️**DIA**☀️----------\n☀️ **¡Amanece un nuevo día!**\n😮 Pero esta vez... **¡nadie murió!**\n🧐 ¿Una protección o un error de cálculo?")
+
+        await canal.send("🗳️ **Es hora de votar**: ¿quién creés que es parte de la mafia?")
+
+        # Diccionario para guardar los votos realizados
+        votos = {}
+        # Creamos una vista con botones para que los jugadores voten
+        view = View()
+
+        # Por cada jugador vivo, agregamos un botón para votar por él
+        for objetivo in partida["vivos"]:
+            button = Button(label=objetivo.display_name, style=discord.ButtonStyle.danger)
+
+            # Función que se ejecuta cuando se hace clic en un botón de voto
+            async def callback(interaction, obj=objetivo):
+                votante = interaction.user
+
+                # Validamos que el votante esté vivo
+                if votante not in partida["vivos"]:
+                    await interaction.response.send_message("🚫 No estás vivo en la partida.", ephemeral=True)
+                    return
+                
+                # Validamos que no haya votado ya
+                if votante in votos:
+                    await interaction.response.send_message("⚠️ Ya votaste.", ephemeral=True)
+                    return
+
+                # Registramos el voto
+                votos[votante] = obj
+                await interaction.response.send_message(f"✅ Votaste por **{obj.display_name}**.", ephemeral=True)
+
+            # Asignamos el callback al botón
+            button.callback = callback
+            view.add_item(button)
+
+        # Enviamos el mensaje con los botones de votación
+        await canal.send("⏳Tienen solo **60 segundos**⏳\n🔻 Hacé clic en el nombre del jugador que querés eliminar:", view=view)
+        await asyncio.sleep(60) # Esperamos 60 segundos para que todos voten
+
+        # Si hubo al menos un voto durante la votación
+        if votos:
+            conteo = {} # Diccionario para contar cuántos votos recibió cada jugador
+            # Recorremos todos los votos y sumamos los votos para cada jugador
+            for elegido in votos.values():
+                conteo[elegido] = conteo.get(elegido, 0) + 1
+
+            # Buscamos el número máximo de votos recibidos por un jugador
+            max_votos = max(conteo.values())
+            
+            # Buscamos quiénes recibieron ese número máximo de votos (por si hay empate)
+            candidatos = [jug for jug, votos in conteo.items() if votos == max_votos]
+            
+            # Si solo hay un jugador con más votos, ese jugador es eliminado
+            if len(candidatos) == 1:
+                eliminado = candidatos[0] # Lo eliminamos de la lista de vivos
+                partida["vivos"].discard(eliminado)
+                await canal.send(f"⚰️ **{eliminado.display_name}** fue eliminado por votación del pueblo.")
+            else:
+                # Si hay un empate, no se elimina a nadie y se informa
+                empatados = ", ".join(j.display_name for j in candidatos)
+                await canal.send(f"⚖️ ¡Empate entre **{empatados}**!\n😶 Nadie será eliminado hoy.")
+        else:
+            await canal.send("😶 Nadie votó. El pueblo decide no eliminar a nadie hoy.")
+
+        # Volvemos a calcular cuántas mafias y no-mafias quedan vivos después de la votación
+        vivos_roles = [partida["roles"][j] for j in partida["vivos"]]
+        mafias = vivos_roles.count("mafia")
+        no_mafias = len(partida["vivos"]) - mafias
+
+        if mafias == 0:
+            await anunciar_fin(canal, partida, ganadores="Ciudadanos")
+            break
+        elif mafias >= no_mafias:
+            await anunciar_fin(canal, partida, ganadores="Mafia")
+            break
+
+        await asyncio.sleep(5)
+
+# Función que se llama cuando la partida termina, para anunciar a los ganadores y mostrar los roles
+async def anunciar_fin(canal, partida, ganadores):
+    # Mensaje inicial anunciando el fin de la partida y quién ganó
+    await canal.send(f"🏁 **¡LA PARTIDA HA TERMINADO!**\n🥇 **GANADORES: {ganadores.upper()}** 🎉\n🔎 Revelando roles...")
+
+    resumen = {} # Diccionario que agrupará los nombres de los jugadores por rol
+    
+    # Recorremos todos los jugadores y sus roles
+    for jugador, rol in partida["roles"].items():
+        resumen.setdefault(rol, []).append(jugador.display_name) # Agrupamos por rol
+
+    # Mostramos en el canal qué jugadores tenía cada rol (en orden)
+    for rol in ["mafia", "doctor", "detective", "ciudadano"]:
+        if rol in resumen:
+            jugadores = ", ".join(resumen[rol])
+            await canal.send(f"🔹 **{rol.capitalize()}s**: {jugadores}")
+    
+    # Mensaje final de cierre, invitando a jugar otra vez
+    await canal.send("🕹️ ¡Gracias por jugar! Volvé a organizar otra partida con `!mafia crear`.")
+
+    del partidas[canal.guild.id] # Eliminamos la partida del registro global, ya que terminó
+
 bot.run(TOKEN) # Corremos el bot
