@@ -186,7 +186,7 @@ async def mafia(ctx, subcomando=None, num: int = None): # Comando principal del 
 
     else:
         # Subcomando no reconocido
-        await ctx.send(f"**{ctx.author.mention}**, vos queres que te coja, no? 🤨")
+        await ctx.send(f"**{ctx.author.mention}**, Utiliza `!mafia crear` para crear una partida o usa `!mafia unirme` para unirte a una ya existente. :D")
 
 # Esta función gestiona todo el flujo del juego: asigna roles, controla las fases de noche y día, y verifica condiciones de victoria
 async def iniciar_partida(ctx, partida):
